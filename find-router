@@ -1,0 +1,309 @@
+#!/usr/bin/env python
+import time
+import datetime
+import sys
+import csv
+import os
+import shutil
+import subprocess
+from scapy.utils import wrpcap
+from qiang.probe import DnsWrongAnswerProbe
+from qiang.probe import HttpTcpRstProbe
+from qiang.probe import DnsTcpRstProbe
+from qiang.probe import SmtpMailFromTcpRstProbe
+from qiang.probe import SmtpRcptToTcpRstProbe
+from qiang.probe import SmtpHeloRcptToTcpRstProbe
+from qiang.probe import TcpPacketDropProbe
+from qiang.probe import UdpPacketDropProbe
+from qiang import networking
+from qiang import config
+
+ALL_JAMMING_METHODS = set()
+if config.dns_wrong_answer_probe:
+    ALL_JAMMING_METHODS.add('DNS_WRONG_ANSWER')
+if config.http_tcp_rst_probe:
+    ALL_JAMMING_METHODS.add('HTTP_TCP_RST')
+if config.dns_tcp_rst_probe:
+    ALL_JAMMING_METHODS.add('DNS_TCP_RST')
+if config.smtp_mail_from_tcp_rst_probe:
+    ALL_JAMMING_METHODS.add('SMTP_MAIL_FROM_TCP_RST')
+if config.smtp_rcpt_to_tcp_rst_probe:
+    ALL_JAMMING_METHODS.add('SMTP_RCPT_TO_TCP_RST')
+if config.smtp_helo_rcpt_to_tcp_rst_probe:
+    ALL_JAMMING_METHODS.add('SMTP_HELO_RCPT_TO_TCP_RST')
+if config.tcp_packet_drop_probe:
+    ALL_JAMMING_METHODS.add('TCP_PACKET_DROP')
+if config.udp_packet_drop_probe:
+    ALL_JAMMING_METHODS.add('UDP_PACKET_DROP')
+
+if len(sys.argv) == 1:
+    print('[usage] ./find-router destination-ip')
+    sys.exit(1)
+
+
+def main(dst):
+    if config.fixed_route:
+        networking.make_route_fixed(config.fixed_route[0], config.fixed_route[1])
+    iface, src, _ = networking.get_route(dst)
+    if config.debug:
+        print('probing between %s <=> %s, at interface %s' % (src, dst, iface))
+    probed_at = datetime.datetime.now().isoformat()
+    found_jamming_methods = set()
+    silent_routers = {}
+    for ttl in range(config.min_ttl, config.max_ttl + 1):
+        more_jamming_methods, more_silent_routers = do_probing(probed_at, iface, src, dst, ttl, found_jamming_methods)
+        if more_jamming_methods: # found other jamming method at same TTL make those silent routers interesting
+            silent_routers[ttl] = more_silent_routers
+        found_jamming_methods = found_jamming_methods.union(more_jamming_methods)
+        if ALL_JAMMING_METHODS == found_jamming_methods:
+            break
+    with open(os.path.join(config.output_dir, 'silent-routers.csv'), 'a') as f:
+        csv_writer = csv.writer(f)
+        for missing_jamming_method in (ALL_JAMMING_METHODS - found_jamming_methods):
+            for ttl, routers in silent_routers.items():
+                router_ip = routers[missing_jamming_method] or '*'
+                print('jamming event not found at: %s %s' % (missing_jamming_method, router_ip))
+                csv_writer.writerow([probed_at, missing_jamming_method, dst, str(ttl), router_ip])
+    packets_dir = get_packets_dir(probed_at)
+    if found_jamming_methods:
+        subprocess.call('tar -zcf %s.tar.gz %s' % (packets_dir, packets_dir), shell=True)
+    shutil.rmtree(packets_dir)
+
+
+def get_packets_dir(probed_at):
+    return os.path.join(config.output_dir, 'packets', probed_at)
+
+
+def do_probing(probed_at, iface, src, dst, ttl, found_jamming_methods):
+    if config.debug:
+        print('')
+        print('=== ttl: %s ===' % ttl)
+    sniffer = networking.create_sniffer(iface, src, dst, config.sniffer_type)
+    probes = {
+        'UDP_ROUTE_AA': UdpPacketDropProbe(
+            src, config.udp_route_probe['a_sport'],
+            dst, config.udp_route_probe['a_dport'],
+            ttl, sniffer, ),
+        'UDP_ROUTE_AB': UdpPacketDropProbe(
+            src, config.udp_route_probe['a_sport'],
+            dst, config.udp_route_probe['b_dport'],
+            ttl, sniffer),
+        'UDP_ROUTE_AC': UdpPacketDropProbe(
+            src, config.udp_route_probe['a_sport'],
+            dst, config.udp_route_probe['c_dport'],
+            ttl, sniffer),
+        'UDP_ROUTE_BA': UdpPacketDropProbe(
+            src, config.udp_route_probe['b_sport'],
+            dst, config.udp_route_probe['a_dport'],
+            ttl, sniffer),
+        'UDP_ROUTE_CA': UdpPacketDropProbe(
+            src, config.udp_route_probe['c_sport'],
+            dst, config.udp_route_probe['a_dport'],
+            ttl, sniffer),
+        'TCP_ROUTE_AA': TcpPacketDropProbe(
+            src, config.tcp_route_probe['a_sport'],
+            dst, config.tcp_route_probe['a_dport'],
+            ttl, sniffer),
+        'TCP_ROUTE_AB': TcpPacketDropProbe(
+            src, config.tcp_route_probe['a_sport'],
+            dst, config.tcp_route_probe['b_dport'],
+            ttl, sniffer),
+        'TCP_ROUTE_AC': TcpPacketDropProbe(
+            src, config.tcp_route_probe['a_sport'],
+            dst, config.tcp_route_probe['c_dport'],
+            ttl, sniffer),
+        'TCP_ROUTE_BA': TcpPacketDropProbe(
+            src, config.tcp_route_probe['b_sport'],
+            dst, config.tcp_route_probe['a_dport'],
+            ttl, sniffer),
+        'TCP_ROUTE_CA': TcpPacketDropProbe(
+            src, config.tcp_route_probe['c_sport'],
+            dst, config.tcp_route_probe['a_dport'],
+            ttl, sniffer)
+    }
+    if 'DNS_WRONG_ANSWER' not in found_jamming_methods and config.dns_wrong_answer_probe:
+        probes['DNS_WRONG_ANSWER'] = DnsWrongAnswerProbe(
+            src, config.dns_wrong_answer_probe['sport'],
+            dst, config.dns_wrong_answer_probe['dport'], ttl, sniffer)
+    if 'HTTP_TCP_RST' not in found_jamming_methods and config.http_tcp_rst_probe:
+        probe_config = config.http_tcp_rst_probe
+        probes['HTTP_TCP_RST'] = HttpTcpRstProbe(
+            src, probe_config['sport'],
+            dst, probe_config['dport'], ttl, sniffer,
+            interval_between_syn_and_offending_payload=probe_config['interval_between_syn_and_http_get'])
+    if 'DNS_TCP_RST' not in found_jamming_methods and config.dns_tcp_rst_probe:
+        probe_config = config.dns_tcp_rst_probe
+        probes['DNS_TCP_RST'] = DnsTcpRstProbe(
+            src, probe_config['sport'],
+            dst, probe_config['dport'], ttl, sniffer,
+            interval_between_syn_and_offending_payload=probe_config['interval_between_syn_and_dns_question'])
+    if 'SMTP_MAIL_FROM_TCP_RST' not in found_jamming_methods and config.smtp_mail_from_tcp_rst_probe:
+        probe_config = config.smtp_mail_from_tcp_rst_probe
+        probes['SMTP_MAIL_FROM_TCP_RST'] = SmtpMailFromTcpRstProbe(
+            src, probe_config['sport'],
+            dst, probe_config['dport'], ttl, sniffer,
+            interval_between_syn_and_offending_payload=probe_config['interval_between_syn_and_mail_from'])
+    if 'SMTP_RCPT_TO_TCP_RST' not in found_jamming_methods and config.smtp_mail_from_tcp_rst_probe:
+        probe_config = config.smtp_rcpt_to_tcp_rst_probe
+        probes['SMTP_RCPT_TO_TCP_RST'] = SmtpRcptToTcpRstProbe(
+            src, probe_config['sport'],
+            dst, probe_config['dport'], ttl, sniffer,
+            interval_between_syn_and_offending_payload=probe_config['interval_between_syn_and_rcpt_to'])
+    if 'SMTP_HELO_RCPT_TO_TCP_RST' not in found_jamming_methods and config.smtp_mail_from_tcp_rst_probe:
+        probe_config = config.smtp_helo_rcpt_to_tcp_rst_probe
+        probes['SMTP_HELO_RCPT_TO_TCP_RST'] = SmtpHeloRcptToTcpRstProbe(
+            src, probe_config['sport'],
+            dst, probe_config['dport'], ttl, sniffer,
+            interval_between_syn_and_offending_payload=probe_config['interval_between_syn_and_helo'])
+    if 'TCP_PACKET_DROP' not in found_jamming_methods and config.tcp_packet_drop_probe:
+        probes['TCP_PACKET_DROP_BLOCKED'] = TcpPacketDropProbe(
+            src, config.tcp_packet_drop_probe['blocked_sport'],
+            dst, config.tcp_packet_drop_probe['blocked_dport'], ttl, sniffer)
+        probes['TCP_PACKET_DROP_COMPARISON'] = TcpPacketDropProbe(
+            src, config.tcp_packet_drop_probe['comparison_sport'],
+            dst, config.tcp_packet_drop_probe['comparison_dport'], ttl, sniffer)
+    if 'UDP_PACKET_DROP' not in found_jamming_methods and config.udp_packet_drop_probe:
+        probes['UDP_PACKET_DROP_BLOCKED'] = UdpPacketDropProbe(
+            src, config.udp_packet_drop_probe['blocked_sport'],
+            dst, config.udp_packet_drop_probe['blocked_dport'], ttl, sniffer)
+        probes['UDP_PACKET_DROP_COMPARISON'] = UdpPacketDropProbe(
+            src, config.udp_packet_drop_probe['comparison_sport'],
+            dst, config.udp_packet_drop_probe['comparison_dport'], ttl, sniffer)
+    try:
+        sniffer.start_sniffing()
+        for probe in probes.values():
+            probe.poke()
+        time.sleep(config.interval_between_poke_and_peek)
+        sniffer.stop_sniffing()
+        for probe in probes.values():
+            probe.peek()
+    finally:
+        for probe in probes.values():
+            probe.close()
+    dump_packets(probes)
+    reports = {}
+    for name, probe in probes.items():
+        probe.report['PROBE_SPORT'] = probe.sport
+        probe.report['PROBE_DPORT'] = probe.dport
+        reports[name] = probe.report
+    write_packets(get_packets_dir(probed_at), reports)
+    results, udp_route_type, tcp_route_type = analyze_reports(reports)
+    found_jamming_methods = set()
+    silent_routers = {}
+    with open(os.path.join(config.output_dir, 'gfw-attached-routers.csv'), 'a') as f:
+        csv_writer = csv.writer(f)
+        for jamming_method, router_ip_and_is_jamming in results.items():
+            router_ip, is_jamming = router_ip_and_is_jamming
+            router_ip = router_ip or '*'
+            if is_jamming:
+                found_jamming_methods.add(jamming_method)
+                print('found jamming event: %s at %s (%s, %s)' %
+                      (jamming_method, router_ip, udp_route_type, tcp_route_type))
+                csv_writer.writerow([probed_at, jamming_method, dst, str(ttl), router_ip, udp_route_type, tcp_route_type])
+            else:
+                silent_routers[jamming_method] = router_ip
+    return found_jamming_methods, silent_routers
+
+
+def dump_packets(probes):
+    if not config.debug:
+        return
+    for name, probe in probes.items():
+        print('%s PROBE:' % name)
+        for mark, packet in probe.report['PACKETS']:
+            formatted_packet = packet.sprintf(
+                '\t%.time% [' + mark + '] %IP.ttl% {TCP:%TCP.window% %TCP.flags%}{ICMP:%IP.src%}')
+            print(formatted_packet)
+
+
+def analyze_reports(reports):
+    results = {}
+    udp_route_type = get_route_type(
+        reports['UDP_ROUTE_AA'], reports['UDP_ROUTE_AB'], reports['UDP_ROUTE_AC'],
+        reports['UDP_ROUTE_BA'], reports['UDP_ROUTE_CA'])
+    tcp_route_type = get_route_type(
+        reports['TCP_ROUTE_AA'], reports['TCP_ROUTE_AB'], reports['TCP_ROUTE_AC'],
+        reports['TCP_ROUTE_BA'], reports['TCP_ROUTE_CA'])
+    results['DNS_WRONG_ANSWER'] = analyze_dns_wrong_answer_probe_report(reports.get('DNS_WRONG_ANSWER'))
+    results['HTTP_TCP_RST'] = analyze_tcp_rst_probe_report(reports.get('HTTP_TCP_RST'))
+    results['DNS_TCP_RST'] = analyze_tcp_rst_probe_report(reports.get('DNS_TCP_RST'))
+    results['SMTP_MAIL_FROM_TCP_RST'] = analyze_tcp_rst_probe_report(reports.get('SMTP_MAIL_FROM_TCP_RST'))
+    results['SMTP_RCPT_TO_TCP_RST'] = analyze_tcp_rst_probe_report(reports.get('SMTP_RCPT_TO_TCP_RST'))
+    results['SMTP_HELO_RCPT_TO_TCP_RST'] = analyze_tcp_rst_probe_report(reports.get('SMTP_HELO_RCPT_TO_TCP_RST'))
+    results['TCP_PACKET_DROP'] = analyze_packet_drop_probe_report(
+        reports.get('TCP_PACKET_DROP_BLOCKED'), reports.get('TCP_PACKET_DROP_COMPARISON'), tcp_route_type)
+    results['UDP_PACKET_DROP'] = analyze_packet_drop_probe_report(
+        reports.get('UDP_PACKET_DROP_BLOCKED'), reports.get('UDP_PACKET_DROP_COMPARISON'), udp_route_type)
+    return results, 'UDP_%s' % udp_route_type, 'TCP_%s' % tcp_route_type
+
+
+def get_route_type(report_aa, report_ab, report_ac, report_ba, report_ca):
+    ip_aa = get_router_ip_found_by_packet_drop_probe_report(report_aa)
+    ip_ab = get_router_ip_found_by_packet_drop_probe_report(report_ab)
+    ip_ac = get_router_ip_found_by_packet_drop_probe_report(report_ac)
+    ip_ba = get_router_ip_found_by_packet_drop_probe_report(report_ba)
+    ip_ca = get_router_ip_found_by_packet_drop_probe_report(report_ca)
+    if any([ip_aa is None, ip_ab is None, ip_ac is None, ip_ba is None, ip_ca is None]):
+        return 'ROUTE_UNKNOWN'
+    is_dport_dependent = len(set([ip_aa, ip_ab, ip_ac])) > 1
+    is_sport_dependent = len(set([ip_aa, ip_ba, ip_ca])) > 1
+    if is_dport_dependent and is_sport_dependent:
+        return 'ROUTE_BOTH_DEPENDENT'
+    if is_dport_dependent:
+        return 'ROUTE_DPORT_DEPENDENT'
+    if is_sport_dependent:
+        return 'ROUTE_SPORT_DEPENDENT'
+    return 'ROUTE_INDEPENDENT'
+
+
+def write_packets(packets_dir, reports):
+    if not os.path.exists(packets_dir):
+        os.makedirs(packets_dir)
+    for name, report in reports.items():
+        packets = [packet for mark, packet in report['PACKETS']]
+        wrpcap(os.path.join(packets_dir, name), packets, append=True)
+
+
+def analyze_dns_wrong_answer_probe_report(report):
+    if not report:
+        return None, False
+    return report['ROUTER_IP'], report['WRONG_ANSWER']
+
+
+def analyze_tcp_rst_probe_report(report):
+    if not report:
+        return None, False
+    is_jamming = report['RST_AFTER_SYN?'] or report['RST_AFTER_OFFENDING_PAYLOAD?']
+    router_ip = report['ROUTER_IP_FOUND_BY_SYN'] or report['ROUTER_IP_FOUND_BY_OFFENDING_PAYLOAD']
+    return router_ip, is_jamming
+
+
+def analyze_packet_drop_probe_report(report_blocked, report_comparison, route_type):
+    if not report_blocked or not report_comparison:
+        return None, False
+    router_ip_blocked = get_router_ip_found_by_packet_drop_probe_report(report_blocked)
+    router_ip_comparison = get_router_ip_found_by_packet_drop_probe_report(report_comparison)
+    is_jamming = not router_ip_blocked and router_ip_comparison
+    router_ip = router_ip_comparison if is_comparsion_router_ip_reliable(report_blocked, report_comparison,
+        route_type) else None
+    return router_ip, is_jamming
+
+
+def is_comparsion_router_ip_reliable(report_blocked, report_comparison, route_type):
+    is_sport_different = report_blocked['PROBE_SPORT'] != report_comparison['PROBE_SPORT']
+    is_dport_different = report_blocked['PROBE_DPORT'] != report_comparison['PROBE_DPORT']
+    if is_dport_different and route_type in ['ROUTE_DPORT_DEPENDENT', 'ROUTE_BOTH_DEPENDENT', 'ROUTE_UNKNOWN']:
+        return False
+    if is_sport_different and route_type in ['ROUTE_SPORT_DEPENDENT', 'ROUTE_BOTH_DEPENDENT', 'ROUTE_UNKNOWN']:
+        return False
+    return True
+
+
+def get_router_ip_found_by_packet_drop_probe_report(report):
+    router_ip = report['ROUTER_IP_FOUND_BY_PACKET_1']
+    router_ip = router_ip or report['ROUTER_IP_FOUND_BY_PACKET_2']
+    router_ip = router_ip or report['ROUTER_IP_FOUND_BY_PACKET_3']
+    return router_ip
+
+
+main(*sys.argv[1:])
