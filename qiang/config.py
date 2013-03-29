@@ -104,17 +104,19 @@ udp_packet_drop_probe = None
 #    'comparison_dport': 53
 #}
 
-# config below works whne you probe from abroad to China
-# if you want to probe from China to abroad, change the settings below
-# to provide abroad ip
+# config below works when you probe from China to abroad
 ip_providers = [
-    'by_carrier.py CHINANET | limit.py 50',
-    'by_carrier.py CNCGROUP | limit.py 50',
-    'by_carrier.py CN-CMCC | limit.py 50',
-    'by_carrier.py CN-CRTC | limit.py 50',
-    'by_carrier.py CERNET-AP | limit.py 50',
-    'by_carrier.py CN-CSTNET | limit.py 50'
+    'by_country.py JP | limit.py 50'
 ]
+# if you want to probe from abroad to China, uncomment settings below
+# ip_providers = [
+#     'by_carrier.py CHINANET | limit.py 50',
+#     'by_carrier.py CNCGROUP | limit.py 50',
+#     'by_carrier.py CN-CMCC | limit.py 50',
+#     'by_carrier.py CN-CRTC | limit.py 50',
+#     'by_carrier.py CERNET-AP | limit.py 50',
+#     'by_carrier.py CN-CSTNET | limit.py 50'
+# ]
 
 # you can use a file at ~/.qiang.cfg to override settings in this config file
 import os
