@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+import subprocess
+import os
+import time
+import signal
+from qiang import config
+
+ALL_DESTINATIONS_PATH = os.path.join(config.output_dir, 'all-destinations.txt')
+IP_PROVIDER_PATH = os.path.join(os.path.dirname(__file__), 'qiang', 'destination')
+PROBED_DESTINATIONS_PATH = os.path.join(config.output_dir, 'probed-destinations.txt')
+
+
+def main():
+    all_destinations = list_all_destinations()
+    print('#all destinations: %s' % len(all_destinations))
+    probed_destinations = list_probed_destinations()
+    print('#probed destinations: %s' % len(probed_destinations))
+    destinations = list(all_destinations - probed_destinations)
+    for batch in make_batches(destinations, config.batch_size):
+        probe_procs = {}
+        for destination in batch:
+            print('probing %s...' % destination)
+            probe_proc = subprocess.Popen(
+                './find-router %s' % destination, shell=True,
+                stderr=subprocess.PIPE, stdout=subprocess.PIPE, stdin=subprocess.PIPE)
+            probe_procs[destination] = probe_proc
+        for destination, probe_proc in probe_procs.items():
+            if not wait_for_process(probe_proc):
+                print('probe timeout %s' % destination)
+                print(probe_proc.stdout.read())
+                print(probe_proc.stderr.read())
+                continue
+            if probe_proc.returncode:
+                print('failed to probe %s' % destination)
+                print(probe_proc.stdout.read())
+                print(probe_proc.stderr.read())
+                continue
+            print('finished %s' % destination)
+            with open(PROBED_DESTINATIONS_PATH, 'a') as f:
+                f.write('%s\n' % destination)
+    print('done.')
+
+
+def wait_for_process(proc):
+    started_at = time.time()
+    while proc.poll() is None:
+        time.sleep(5)
+        now = time.time()
+        if now - started_at > 60 * 5:
+            try:
+                os.kill(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass # ignore No Such Process
+            os.waitpid(-1, os.WNOHANG)
+            return False
+    return True
+
+
+def make_batches(iterable, n=1):
+# http://stackoverflow.com/a/8290508
+    l = len(iterable)
+    for ndx in range(0, l, n):
+        yield iterable[ndx:min(ndx + n, l)]
+
+
+def list_all_destinations():
+    if not os.path.exists(ALL_DESTINATIONS_PATH):
+        with open(ALL_DESTINATIONS_PATH, 'a') as f:
+            for ip_provider in config.ip_providers:
+                env = os.environ.copy()
+                env['PATH'] = '%s:%s' % (IP_PROVIDER_PATH, env['PATH'])
+                print('download destinations by: %s' % ip_provider)
+                download_proc = subprocess.Popen(
+                    ip_provider, shell=True, env=env,
+                    stderr=subprocess.PIPE, stdout=subprocess.PIPE, stdin=subprocess.PIPE)
+                download_proc.wait()
+                if download_proc.returncode:
+                    print(download_proc.stdout.read())
+                    print(download_proc.stderr.read())
+                    raise Exception('failed to download destinations')
+                f.write(''.join(download_proc.stdout.readlines()[:-1]))
+    with open(ALL_DESTINATIONS_PATH) as f:
+        return set([ip.strip() for ip in f.readlines()]) # last line is end indicator
+
+
+def list_probed_destinations():
+    if os.path.exists(PROBED_DESTINATIONS_PATH):
+        with open(PROBED_DESTINATIONS_PATH) as f:
+            return set([ip.strip() for ip in f.readlines()])
+    return set()
+
+
+main()

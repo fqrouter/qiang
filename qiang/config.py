@@ -115,9 +115,6 @@ ip_providers = [
     'by_carrier.py CERNET-AP | limit.py 50',
     'by_carrier.py CN-CSTNET | limit.py 50'
 ]
-as_providers = [
-    'by_country.py CN asn'
-]
 
 # you can use a file at ~/.qiang.cfg to override settings in this config file
 import os
