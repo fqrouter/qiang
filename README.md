@@ -12,3 +12,9 @@ Description: find-router command will send packet to the destination-ip you spec
 change from a very low value and increase one each time. When the packet reached the router with GFW
 attached, we will start to recieve "TCP RST" or "Wrong DNS Answer" due to GFW reactions. By doing this, we
 can tell if there is any GFW attached router between you and the destionation ip, and what's it ip address.
+
+Blog post:
+
+* http://fqrouter.tumblr.com/post/46561836548/gfw-qiang
+* http://fqrouter.tumblr.com/post/46745599157/qiang-dns-wrong-answer-probe-py
+* http://fqrouter.tumblr.com/post/46758595474/qiang-tcp-rst-probe-py
