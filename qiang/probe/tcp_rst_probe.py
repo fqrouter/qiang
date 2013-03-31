@@ -5,6 +5,7 @@ import os
 import socket
 import struct
 import atexit
+import argparse
 from scapy.layers.inet import IP, TCP, IPerror, TCPerror
 from scapy.layers.dns import DNS, DNSQR
 
@@ -54,13 +55,7 @@ ROOT_USER_ID = 0
 
 
 def main(dst, ttl, probe_type_code='HTTP', waits_for_syn_ack=False):
-    probe_types = {
-        'HTTP': HttpTcpRstProbe,
-        'DNS': DnsTcpRstProbe,
-        'SMTP_HELO_RCPT_TO': SmtpHeloRcptToTcpRstProbe,
-        'SMTP_MAIL_FROM': SmtpMailFromTcpRstProbe,
-        'SMTP_RCPT_TO': SmtpRcptToTcpRstProbe
-    }
+    probe_types = list_probe_types()
     probe_type = probe_types[probe_type_code]
     iface, src, _ = networking.get_route(dst)
     dport = probe_type.get_default_dport()
@@ -84,6 +79,16 @@ def main(dst, ttl, probe_type_code='HTTP', waits_for_syn_ack=False):
     for mark, packet in packets:
         formatted_packet = packet.sprintf('%.time% %IP.src% -> %IP.dst% %TCP.flags%')
         print('[%s] %s' % (mark, formatted_packet))
+
+
+def list_probe_types():
+    return {
+        'HTTP': HttpTcpRstProbe,
+        'DNS': DnsTcpRstProbe,
+        'SMTP_HELO_RCPT_TO': SmtpHeloRcptToTcpRstProbe,
+        'SMTP_MAIL_FROM': SmtpMailFromTcpRstProbe,
+        'SMTP_RCPT_TO': SmtpRcptToTcpRstProbe
+    }
 
 
 class TcpRstProbe(object):
@@ -342,8 +347,10 @@ class SmtpHeloRcptToTcpRstProbe(TcpRstProbe):
 
 
 if '__main__' == __name__:
-    if 1 == len(sys.argv):
-        print('[Usage] ./tcp_rst_probe.py destination_ip ttl')
-        sys.exit(3)
-    else:
-        main(*sys.argv[1:])
+    argument_parser = argparse.ArgumentParser(description="Detect GFW attached router using the TCP RST sent back")
+    argument_parser.add_argument('destination', help='ip address to shoot at')
+    argument_parser.add_argument('ttl', type=int)
+    argument_parser.add_argument('--probe', choices=list_probe_types().keys(), default='HTTP')
+    argument_parser.add_argument('--behind-firewall', action='store_const', const=True)
+    args = argument_parser.parse_args()
+    main(args.destination, args.ttl, probe_type_code=args.probe, waits_for_syn_ack=args.behind_firewall)
