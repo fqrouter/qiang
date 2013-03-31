@@ -53,7 +53,7 @@ SMTP_DPORT = 25
 ROOT_USER_ID = 0
 
 
-def main(dst, ttl, probe_type_code='HTTP'):
+def main(dst, ttl, probe_type_code='HTTP', waits_for_syn_ack=False):
     probe_types = {
         'HTTP': HttpTcpRstProbe,
         'DNS': DnsTcpRstProbe,
@@ -66,7 +66,9 @@ def main(dst, ttl, probe_type_code='HTTP'):
     dport = probe_type.get_default_dport()
     if ROOT_USER_ID == os.geteuid():
         sniffer = networking.create_sniffer(iface, src, dst)
-        probe = probe_type(src, SPORT, dst, dport, int(ttl), sniffer)
+        probe = probe_type(
+            src, SPORT, dst, dport, int(ttl), sniffer,
+            waits_for_syn_ack=waits_for_syn_ack)
         sniffer.start_sniffing()
         probe.poke()
         time.sleep(2)
@@ -86,7 +88,8 @@ def main(dst, ttl, probe_type_code='HTTP'):
 
 class TcpRstProbe(object):
     def __init__(self, src, sport, dst, dport, ttl, sniffer,
-                 interval_between_syn_and_offending_payload=0.5):
+                 interval_between_syn_and_offending_payload=0.5,
+                 waits_for_syn_ack=False):
         self.src = src
         self.sport = sport
         self.dst = dst
@@ -94,6 +97,7 @@ class TcpRstProbe(object):
         self.ttl = ttl
         self.sniffer = sniffer
         self.interval_between_syn_and_offending_payload = interval_between_syn_and_offending_payload
+        self.waits_for_syn_ack = waits_for_syn_ack
         self.report = self.initialize_report({
             'ROUTER_IP_FOUND_BY_SYN': None,
             'ROUTER_IP_FOUND_BY_OFFENDING_PAYLOAD': None,
@@ -103,6 +107,7 @@ class TcpRstProbe(object):
             'PACKETS': []
         })
         self.tcp_socket = None
+        self.offending_payload_sent_at = None
 
     @classmethod
     def initialize_report(cls, report):
@@ -116,10 +121,13 @@ class TcpRstProbe(object):
 
     def send_syn(self):
         if self.sniffer:
-            packet = IP(src=self.src, dst=self.dst, id=self.ttl * 10 + 1, ttl=self.ttl) / \
+            packet = IP(src=self.src, dst=self.dst, id=self.ttl * 10 + 1,
+                        ttl=64 if self.waits_for_syn_ack else self.ttl) / \
                      TCP(sport=self.sport, dport=self.dport, flags='S', seq=0)
             networking.send(packet)
             self.report['PACKETS'].append(('SYN', packet))
+            if self.waits_for_syn_ack:
+                self.wait_for_syn_ack()
         else:
             self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             atexit.register(networking.immediately_close_tcp_socket_so_sport_can_be_reused, self.tcp_socket)
@@ -128,13 +136,23 @@ class TcpRstProbe(object):
             self.tcp_socket.bind((self.src, self.sport)) # if sport change the route going through might change
             self.tcp_socket.connect((self.dst, self.dport))
 
+    def wait_for_syn_ack(self):
+        for i in range(10):
+            time.sleep(0.3)
+            self.peek()
+            if self.report['SYN_ACK?']:
+                return
+        raise Exception('SYN ACK not received')
+
     def close(self):
         networking.immediately_close_tcp_socket_so_sport_can_be_reused(self.tcp_socket)
 
     def send_offending_payload(self):
         if self.sniffer:
+
             packet = IP(src=self.src, dst=self.dst, id=self.ttl * 10 + 2, ttl=self.ttl) / \
-                     TCP(sport=self.sport, dport=self.dport, flags='A', seq=1, ack=100) / self.get_offending_payload()
+                     TCP(sport=self.sport, dport=self.dport, flags='A',
+                         seq=1, ack=self.report['SYN_ACK?'] or 100) / self.get_offending_payload()
             networking.send(packet)
             self.report['PACKETS'].append(('OFFENDING_PAYLOAD', packet))
         else:
@@ -181,7 +199,7 @@ class TcpRstProbe(object):
         if packet[TCP].flags & TH_SYN and packet[TCP].flags & TH_ACK:
             self.record_syn_ack(packet)
         elif packet[TCP].flags & TH_RST:
-            if packet.time < self.offending_payload_sent_at:
+            if not self.offending_payload_sent_at or packet.time < self.offending_payload_sent_at:
                 self.record_rst_after_syn(packet)
             else:
                 self.record_rst_after_offending_payload(packet)
@@ -208,7 +226,7 @@ class TcpRstProbe(object):
             self.report['PACKETS'].append(('ADDITIONAL_SYN_ACK', packet))
         else:
             self.report['PACKETS'].append(('SYN_ACK', packet))
-            self.report['SYN_ACK?'] = True
+            self.report['SYN_ACK?'] = packet[TCP].seq
 
     def record_rst_after_syn(self, packet):
         if self.report['RST_AFTER_SYN?']:
