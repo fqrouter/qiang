@@ -5,7 +5,6 @@ import os
 import socket
 import struct
 import atexit
-import argparse
 from scapy.layers.inet import IP, TCP, IPerror, TCPerror
 from scapy.layers.dns import DNS, DNSQR
 
@@ -347,6 +346,8 @@ class SmtpHeloRcptToTcpRstProbe(TcpRstProbe):
 
 
 if '__main__' == __name__:
+    import argparse
+
     argument_parser = argparse.ArgumentParser(description="Detect GFW attached router using the TCP RST sent back")
     argument_parser.add_argument('destination', help='ip address to shoot at')
     argument_parser.add_argument('ttl', type=int)

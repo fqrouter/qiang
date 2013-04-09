@@ -68,6 +68,8 @@ def main(dst):
     if found_jamming_methods:
         subprocess.call('tar -zcf %s.tar.gz %s' % (packets_dir, packets_dir), shell=True)
     shutil.rmtree(packets_dir)
+    if found_jamming_methods:
+        sys.exit(1)
 
 
 def get_packets_dir(probed_at):
@@ -199,7 +201,8 @@ def do_probing(probed_at, iface, src, dst, ttl, found_jamming_methods):
                 found_jamming_methods.add(jamming_method)
                 print('found jamming event: %s at %s (%s, %s)' %
                       (jamming_method, router_ip, udp_route_type, tcp_route_type))
-                csv_writer.writerow([probed_at, jamming_method, dst, str(ttl), router_ip, udp_route_type, tcp_route_type])
+                csv_writer.writerow(
+                    [probed_at, jamming_method, dst, str(ttl), router_ip, udp_route_type, tcp_route_type])
             else:
                 silent_routers[jamming_method] = router_ip
     return found_jamming_methods, silent_routers
@@ -285,7 +288,7 @@ def analyze_packet_drop_probe_report(report_blocked, report_comparison, route_ty
     router_ip_comparison = get_router_ip_found_by_packet_drop_probe_report(report_comparison)
     is_jamming = not router_ip_blocked and router_ip_comparison
     router_ip = router_ip_comparison if is_comparsion_router_ip_reliable(report_blocked, report_comparison,
-        route_type) else None
+                                                                         route_type) else None
     return router_ip, is_jamming
 
 
