@@ -63,7 +63,7 @@ while True:
                 record_event('UNBLOCKED', destination)
             start_checker(destination)
             checker['was_blocked'] = False
-        elif 1984 == result:
+        elif 42 == result:
             if checker['was_blocked'] is None:
                 record_event('INITIALLY BLOCKED', destination)
             elif not checker['was_blocked']:
