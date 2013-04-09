@@ -13,6 +13,13 @@ change from a very low value and increase one each time. When the packet reached
 attached, we will start to recieve "TCP RST" or "Wrong DNS Answer" due to GFW reactions. By doing this, we
 can tell if there is any GFW attached router between you and the destionation ip, and what's it ip address.
 
+Command: ./watchdog dst1 dst2 dst3 ...
+
+Example: ./watchdog 202.106.0.20 173.252.110.27 2> /tmp/watchdog.log
+
+Description: watchdog will run find-router against the destinations you specified. It will report if it is initially
+blocked and when it is being unblocked/blocked in file var/watchdog.csv.
+
 Blog post:
 
 * http://fqrouter.tumblr.com/post/46561836548/gfw-qiang

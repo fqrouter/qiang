@@ -17,8 +17,23 @@ def start_checker(destination):
     checkers[destination]['started_at'] = time.time()
 
 
+def log_error(error):
+    sys.stderr.write(error)
+    sys.stderr.write('\n')
+    sys.stderr.flush()
+
+
+def log_message(message):
+    sys.stdout.write(message)
+    sys.stdout.write('\n')
+    sys.stdout.flush()
+    sys.stderr.write(message)
+    sys.stderr.write('\n')
+    sys.stderr.flush()
+
+
 def record_event(event, destination):
-    print('%s: %s' % (event, destination))
+    log_message('%s: %s' % (event, destination))
     with open(os.path.join(config.output_dir, 'watchdog.csv'), 'a') as f:
         csv_writer = csv.writer(f)
         csv_writer.writerow([datetime.datetime.now().isoformat(), event, destination])
@@ -37,8 +52,8 @@ while True:
             # not finished yet
             if time.time() - checker['started_at'] > 60 * 5:
                 # timeout
-                print('TIMEOUT: %s' % destination)
-                print(checker['process'].stdout.read())
+                log_message('TIMEOUT: %s' % destination)
+                log_error(checker['process'].stdout.read())
                 checker['process'].kill()
                 start_checker(destination)
         elif 0 == result:
@@ -56,7 +71,7 @@ while True:
             start_checker(destination)
             checker['was_blocked'] = True
         else:
-            print('ERROR: %s' % destination)
-            print(checker['process'].stdout.read())
+            log_message('ERROR [%s]: %s' % (result, destination))
+            log_error(checker['process'].stdout.read())
             start_checker(destination)
     time.sleep(1)
