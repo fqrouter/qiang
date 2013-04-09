@@ -69,7 +69,7 @@ def main(dst):
         subprocess.call('tar -zcf %s.tar.gz %s' % (packets_dir, packets_dir), shell=True)
     shutil.rmtree(packets_dir)
     if found_jamming_methods:
-        sys.exit(1)
+        sys.exit(1984)
 
 
 def get_packets_dir(probed_at):
