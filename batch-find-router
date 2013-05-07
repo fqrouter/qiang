@@ -27,13 +27,17 @@ def main():
         for destination, probe_proc in probe_procs.items():
             if not wait_for_process(probe_proc):
                 print('probe timeout %s' % destination)
-                print(probe_proc.stdout.read())
-                print(probe_proc.stderr.read())
+                try:
+                    print(probe_proc.communicate())
+                except:
+                    pass
                 continue
-            if probe_proc.returncode:
+            if probe_proc.poll():
                 print('failed to probe %s' % destination)
-                print(probe_proc.stdout.read())
-                print(probe_proc.stderr.read())
+                try:
+                    print(probe_proc.communicate())
+                except:
+                    pass
                 continue
             print('finished %s' % destination)
             with open(PROBED_DESTINATIONS_PATH, 'a') as f:
@@ -48,10 +52,9 @@ def wait_for_process(proc):
         now = time.time()
         if now - started_at > 60 * 5:
             try:
-                os.kill(proc.pid, signal.SIGKILL)
-            except OSError:
+                proc.kill()
+            except:
                 pass # ignore No Such Process
-            os.waitpid(-1, os.WNOHANG)
             return False
     return True
 
