@@ -25,3 +25,6 @@ Blog post:
 * http://fqrouter.tumblr.com/post/46561836548/gfw-qiang
 * http://fqrouter.tumblr.com/post/46745599157/qiang-dns-wrong-answer-probe-py
 * http://fqrouter.tumblr.com/post/46758595474/qiang-tcp-rst-probe-py
+
+[![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/fqrouter/qiang/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
+
